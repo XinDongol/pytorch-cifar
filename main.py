@@ -12,11 +12,11 @@ import os
 import argparse
 
 from models import *
-from utils import progress_bar
+# from utils import progress_bar
 
 
 parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
-parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
+parser.add_argument('--lr', default=0.01, type=float, help='learning rate')
 parser.add_argument('--resume', '-r', action='store_true',
                     help='resume from checkpoint')
 args = parser.parse_args()
@@ -54,7 +54,7 @@ classes = ('plane', 'car', 'bird', 'cat', 'deer',
 
 # Model
 print('==> Building model..')
-# net = VGG('VGG19')
+net = VGG('VGG16')
 # net = ResNet18()
 # net = PreActResNet18()
 # net = GoogLeNet()
@@ -68,7 +68,7 @@ print('==> Building model..')
 # net = ShuffleNetV2(1)
 # net = EfficientNetB0()
 # net = RegNetX_200MF()
-net = SimpleDLA()
+# net = SimpleDLA()
 net = net.to(device)
 if device == 'cuda':
     net = torch.nn.DataParallel(net)
@@ -88,6 +88,29 @@ optimizer = optim.SGD(net.parameters(), lr=args.lr,
                       momentum=0.9, weight_decay=5e-4)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=200)
 
+class FeatureHook():
+    def __init__(self, name, module):
+        self.name = name
+        self.module = module
+        self.hook = module.register_forward_hook(self.hook_fn)
+
+    def hook_fn(self, module, input, output):
+        
+        self.inp = input[0]
+        self.out = output
+
+        # r_feature = torch.norm(module.running_var.data.type(var.type()) - var, 2) + torch.norm(
+        #     module.running_mean.data.type(var.type()) - mean, 2)
+
+        # self.r_feature = r_feature
+    def close(self):
+        self.hook.remove()
+
+hooks = {}
+
+for n,m in net.named_modules():
+    if isinstance(m, nn.Conv2d):
+        hooks[n] = FeatureHook(n, m)
 
 # Training
 def train(epoch):
@@ -102,6 +125,26 @@ def train(epoch):
         outputs = net(inputs)
         loss = criterion(outputs, targets)
         loss.backward()
+
+        print('-'*20+'grad abs mean'+'-'*20)
+        for n, h in hooks.items():
+            print(n, str(h.module)[:16], ' | ', '%.3e'%h.module.weight.grad.abs().mean().item())
+
+        print('-'*20+'grad abs std'+'-'*20)
+        for n, h in hooks.items():
+            print(n, str(h.module)[:16], ' | ', '%.3e'%h.module.weight.grad.abs().std().item())            
+
+        print('-'*20+'out abs mean'+'-'*20)
+        for n, h in hooks.items():
+            print(n, str(h.module)[:16], ' | ', '%.3e'%h.out.abs().mean().item())
+
+        print('-'*20+'out abs std'+'-'*20)
+        for n, h in hooks.items():
+            print(n, str(h.module)[:16], ' | ', '%.3e'%h.out.abs().std().item())
+
+        print('##'*20)
+        print()
+
         optimizer.step()
 
         train_loss += loss.item()
@@ -109,7 +152,7 @@ def train(epoch):
         total += targets.size(0)
         correct += predicted.eq(targets).sum().item()
 
-        progress_bar(batch_idx, len(trainloader), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
+        print(batch_idx, epoch, 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
                      % (train_loss/(batch_idx+1), 100.*correct/total, correct, total))
 
 
@@ -130,7 +173,7 @@ def test(epoch):
             total += targets.size(0)
             correct += predicted.eq(targets).sum().item()
 
-            progress_bar(batch_idx, len(testloader), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
+            print(batch_idx, epoch, 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
                          % (test_loss/(batch_idx+1), 100.*correct/total, correct, total))
 
     # Save checkpoint.
