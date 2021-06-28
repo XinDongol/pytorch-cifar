@@ -14,10 +14,6 @@ import argparse
 from models import *
 # from utils import progress_bar
 
-from pprint import pprint
-import math
-from torch.nn.init import _calculate_fan_in_and_fan_out, calculate_gain
-
 
 parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
 parser.add_argument('--lr', default=0.01, type=float, help='learning rate')
@@ -44,52 +40,28 @@ transform_test = transforms.Compose([
 ])
 
 trainset = torchvision.datasets.CIFAR10(
-    root='./data', train=True, download=True, transform=transform_train)
+    root='~/results', train=True, download=True, transform=transform_train)
 trainloader = torch.utils.data.DataLoader(
     trainset, batch_size=128, shuffle=True, num_workers=2)
 
 testset = torchvision.datasets.CIFAR10(
-    root='./data', train=False, download=True, transform=transform_test)
+    root='~/results', train=False, download=True, transform=transform_test)
 testloader = torch.utils.data.DataLoader(
     testset, batch_size=100, shuffle=False, num_workers=2)
 
 classes = ('plane', 'car', 'bird', 'cat', 'deer',
            'dog', 'frog', 'horse', 'ship', 'truck')
 
+
+class ToyModel(nn.Module):
+    def __init__(self):
+        super(ToyModel, self).__init__()
+        self.fc1 = nn.Linear
+
 # Model
 print('==> Building model..')
-net = VGG('VGG16')
-
-
-def new_kaiming_uniform_(tensor, a=0, nonlinearity='leaky_relu'):
-    fan_in, fan_out = _calculate_fan_in_and_fan_out(tensor)
-    fan = 0.5*(fan_in + fan_out)
-    gain = calculate_gain(nonlinearity, a)
-    std = gain / math.sqrt(fan)
-    bound = math.sqrt(3.0) * std  # Calculate uniform bounds from standard deviation
-    with torch.no_grad():
-        return tensor.uniform_(-bound, bound)
-
-def new_kaiming_normal_(tensor, a=0, mode='fan_in', nonlinearity='leaky_relu'):
-    fan_in, fan_out = _calculate_fan_in_and_fan_out(tensor)
-    fan = 0.5*(fan_in + fan_out)
-    gain = calculate_gain(nonlinearity, a)
-    std = gain / math.sqrt(fan)
-    with torch.no_grad():
-        return tensor.normal_(0, std)
-
-def new_init_(tensor, c=2/3):
-    kernel_size = tensor.size(2)
-    var = c/(kernel_size * math.sqrt(tensor.size(0)*tensor.size(1)))
-    with torch.no_grad():
-        return tensor.normal_(0, math.sqrt(var))
-
-for m in net.modules():
-    if isinstance(m, nn.Conv2d):
-        # nn.init.kaiming_normal_(m.weight, mode='fan_out', a=0, nonlinearity='relu')
-        # new_kaiming_normal_(m.weight)
-        new_init_(m.weight)
-
+net = ToyModel()
+# net = VGG('VGG16')
 # net = ResNet18()
 # net = PreActResNet18()
 # net = GoogLeNet()
@@ -123,10 +95,6 @@ optimizer = optim.SGD(net.parameters(), lr=args.lr,
                       momentum=0.9, weight_decay=5e-4)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=200)
 
-pprint(net)
-input('press any to continue ...')
-
-
 class FeatureHook():
     def __init__(self, name, module):
         self.name = name
@@ -136,21 +104,12 @@ class FeatureHook():
     def hook_fn(self, module, input, output):
         
         self.inp = input[0]
-        if self.inp.requires_grad:
-            self.inp.retain_grad()
         self.out = output
-        if self.out.requires_grad:
-            self.out.retain_grad()
 
         # r_feature = torch.norm(module.running_var.data.type(var.type()) - var, 2) + torch.norm(
         #     module.running_mean.data.type(var.type()) - mean, 2)
 
         # self.r_feature = r_feature
-
-    # def hook_fn_backward(self, module, inp_grad, out_grad):
-    #     self.inp_grad = inp_grad
-    #     self.out_grad = out_grad
-
     def close(self):
         self.hook.remove()
 
@@ -160,81 +119,38 @@ for n,m in net.named_modules():
     if isinstance(m, nn.Conv2d):
         hooks[n] = FeatureHook(n, m)
 
-
-global_step = 0
 # Training
 def train(epoch):
-    global global_step
     print('\nEpoch: %d' % epoch)
     net.train()
     train_loss = 0
     correct = 0
     total = 0
     for batch_idx, (inputs, targets) in enumerate(trainloader):
-        global_step += 1
         inputs, targets = inputs.to(device), targets.to(device)
         optimizer.zero_grad()
         outputs = net(inputs)
         loss = criterion(outputs, targets)
         loss.backward()
 
-        if global_step == 3 or global_step == 5000:
-            # print('-'*20+'grad abs mean'+'-'*20)
-            # for n, h in hooks.items():
-            #     print(n, str(h.module)[:16], ' | ', '%.3e'%h.module.weight.grad.abs().mean().item())
+        print('-'*20+'grad abs mean'+'-'*20)
+        for n, h in hooks.items():
+            print(n, str(h.module)[:16], ' | ', '%.3e'%h.module.weight.grad.abs().mean().item())
 
-            print('-'*20+'grad std'+'-'*20)
-            for n, h in hooks.items():
-                print(n, str(h.module)[:16], ' | ', '%.3e'%h.module.weight.grad.std().item())  
+        print('-'*20+'grad abs std'+'-'*20)
+        for n, h in hooks.items():
+            print(n, str(h.module)[:16], ' | ', '%.3e'%h.module.weight.grad.abs().std().item())            
 
-            print('-'*20+'grad std / weight std'+'-'*20)
-            for n, h in hooks.items():
-                print(n, str(h.module)[:16], ' | ', '%.3e'%(h.module.weight.grad.std().item()/h.module.weight.std().item()))  
+        print('-'*20+'out abs mean'+'-'*20)
+        for n, h in hooks.items():
+            print(n, str(h.module)[:16], ' | ', '%.3e'%h.out.abs().mean().item())
 
-            # print('-'*20+'inp grad abs mean'+'-'*20)
-            # for n, h in hooks.items():
-            #     if h.inp.grad is not None:
-            #         print(n, str(h.module)[:16], ' | ', '%.3e'%h.inp.grad.abs().mean().item())
+        print('-'*20+'out abs std'+'-'*20)
+        for n, h in hooks.items():
+            print(n, str(h.module)[:16], ' | ', '%.3e'%h.out.abs().std().item())
 
-            print('-'*20+'inp grad std'+'-'*20)
-            for n, h in hooks.items():
-                if h.inp.grad is not None:
-                    print(n, str(h.module)[:16], ' | ', '%.3e'%h.inp.grad.std().item())  
-
-            # print('-'*20+'out grad abs mean'+'-'*20)
-            # for n, h in hooks.items():
-            #     print(n, str(h.module)[:16], ' | ', '%.3e'%h.out.grad.abs().mean().item())
-
-            print('-'*20+'out grad std'+'-'*20)
-            for n, h in hooks.items():
-                print(n, str(h.module)[:16], ' | ', '%.3e'%h.out.grad.std().item())  
-
-            # print('-'*20+'inp mean'+'-'*20)
-            # for n, h in hooks.items():
-            #     print(n, str(h.module)[:16], ' | ', '%.3e'%h.inp.mean().item())
-
-            print('-'*20+'inp std'+'-'*20)
-            for n, h in hooks.items():
-                print(n, str(h.module)[:16], ' | ', '%.3e'%h.inp.std().item())          
-
-            # print('-'*20+'out mean'+'-'*20)
-            # for n, h in hooks.items():
-            #     print(n, str(h.module)[:16], ' | ', '%.3e'%h.out.mean().item())
-
-            print('-'*20+'out std'+'-'*20)
-            for n, h in hooks.items():
-                print(n, str(h.module)[:16], ' | ', '%.3e'%h.out.std().item())
-
-            print('-'*20+'weight abs mean'+'-'*20)
-            for n, h in hooks.items():
-                print(n, str(h.module)[:16], ' | ', '%.3e'%h.module.weight.abs().mean().item())
-
-            print('##'*20)
-            print()
-
-            if global_step == 5000:
-                assert 1==0
-
+        print('##'*20)
+        print()
 
         optimizer.step()
 
@@ -243,8 +159,8 @@ def train(epoch):
         total += targets.size(0)
         correct += predicted.eq(targets).sum().item()
 
-    print(batch_idx, epoch, 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
-                    % (train_loss/(batch_idx+1), 100.*correct/total, correct, total))
+        print(batch_idx, epoch, 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
+                     % (train_loss/(batch_idx+1), 100.*correct/total, correct, total))
 
 
 def test(epoch):
@@ -264,8 +180,8 @@ def test(epoch):
             total += targets.size(0)
             correct += predicted.eq(targets).sum().item()
 
-        print(batch_idx, epoch, 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
-                        % (test_loss/(batch_idx+1), 100.*correct/total, correct, total))
+            print(batch_idx, epoch, 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
+                         % (test_loss/(batch_idx+1), 100.*correct/total, correct, total))
 
     # Save checkpoint.
     acc = 100.*correct/total
